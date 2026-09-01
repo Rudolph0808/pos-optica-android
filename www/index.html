@@ -175,12 +175,31 @@
   .sum-row{ display:flex; justify-content:space-between; font-size:0.9rem; color:var(--ink-muted); padding:3px 0; }
   .sum-row.total{ color:var(--ink); font-weight:800; font-size:1.25rem; padding-top:8px; }
   .sum-row.saldo{ color:var(--accent); font-weight:700; }
-  .deposit-field{ margin:10px 0 2px; }
-  .deposit-field label{ font-size:0.78rem; color:var(--ink-muted); display:block; margin-bottom:4px; }
-  .deposit-field input{
+  .patient-field{ margin:2px 0 12px; }
+  .patient-field label{ font-size:0.78rem; color:var(--ink-muted); display:block; margin-bottom:4px; }
+  .patient-field input{
     width:100%; padding:9px 12px; border-radius:10px; border:1px solid var(--border);
     background:var(--surface); color:var(--ink); font-size:0.9rem;
   }
+
+  .deposit-field{ margin:14px 0 6px; }
+  .deposit-field label{
+    font-size:0.85rem; font-weight:800; color:var(--accent); display:block; margin-bottom:6px;
+    text-transform:uppercase; letter-spacing:0.03em;
+  }
+  .deposit-field label .deposit-hint{ text-transform:none; font-weight:500; color:var(--ink-muted); letter-spacing:normal; }
+  .deposit-input-wrap{
+    display:flex; align-items:center; gap:2px;
+    border-radius:12px; border:2px solid var(--accent); background:var(--accent-soft);
+    padding:0 4px 0 14px;
+  }
+  .deposit-input-wrap .deposit-currency{ font-weight:800; font-size:1.3rem; color:var(--accent); }
+  .deposit-field input{
+    flex:1; min-width:0; padding:14px 14px 14px 4px; border:none; background:transparent;
+    color:var(--ink); font-size:1.35rem; font-weight:800;
+  }
+  .deposit-field input:focus-visible{ outline:none; }
+  .deposit-field input::placeholder{ color:var(--ink-muted); font-weight:500; }
   .btn{
     border:none; border-radius:12px; padding:13px 16px; font-weight:700; font-size:0.95rem; cursor:pointer; width:100%;
   }
@@ -295,11 +314,19 @@
             <div class="empty-note">Toca un producto para agregarlo</div>
           </div>
           <div class="cart-summary">
+            <div class="patient-field">
+              <label>Paciente (opcional)</label>
+              <input type="text" id="patientInput" placeholder="Nombre del paciente">
+            </div>
+
             <div class="sum-row total"><span>Total</span><span class="num" id="sumTotal">$0.00</span></div>
 
             <div class="deposit-field">
-              <label>Anticipo (opcional — dejar vacío si paga completo)</label>
-              <input type="number" inputmode="decimal" id="depositInput" placeholder="0.00">
+              <label>Anticipo <span class="deposit-hint">(opcional — dejar vacío si paga completo)</span></label>
+              <div class="deposit-input-wrap">
+                <span class="deposit-currency">$</span>
+                <input type="number" inputmode="decimal" id="depositInput" placeholder="0.00">
+              </div>
             </div>
             <div class="sum-row saldo" id="sumSaldoRow" style="display:none;"><span>Saldo pendiente</span><span class="num" id="sumSaldo">$0.00</span></div>
 
@@ -334,7 +361,7 @@
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Folio</th><th>Fecha</th><th>Total</th><th></th></tr></thead>
+            <thead><tr><th>Folio</th><th>Fecha</th><th>Paciente</th><th>Total</th><th></th></tr></thead>
             <tbody id="salesTableBody"></tbody>
           </table>
         </div>
@@ -792,6 +819,7 @@
     if(state.cart.length && !confirm("¿Cancelar la venta actual?")) return;
     state.cart = [];
     document.getElementById("depositInput").value = "";
+    document.getElementById("patientInput").value = "";
     renderCart();
   });
 
@@ -800,10 +828,12 @@
     var t = cartTotals();
     var dep = depositAmount();
     var folio = (state.sales.length + 1);
+    var patient = document.getElementById("patientInput").value.trim();
     var sale = {
       id: uid("s"),
       folio: folio,
       dateISO: new Date().toISOString(),
+      patient: patient || "",
       items: state.cart.map(function(i){ return {id:i.id, name:i.name, price:i.price, qty:i.qty, note:i.note||""}; }),
       total: t.total,
       deposit: dep > 0 ? dep : null,
@@ -813,6 +843,7 @@
     saveJSON(LS.sales, state.sales);
     state.cart = [];
     document.getElementById("depositInput").value = "";
+    document.getElementById("patientInput").value = "";
     renderCart();
     toast("Venta #" + folio + " registrada");
     showReceiptModal(sale, true);
@@ -844,6 +875,7 @@
     lines.push(center(CLINIC.phones));
     lines.push(line("-"));
     lines.push(twoCols("Folio: " + sale.folio, formatDate(sale.dateISO)));
+    if(sale.patient){ lines.push("Paciente: " + sale.patient); }
     lines.push(line("-"));
     sale.items.forEach(function(it){
       var qtyName = it.qty + "x " + it.name;
@@ -1080,6 +1112,7 @@
     var fakeSale = {
       folio: "TEST",
       dateISO: new Date().toISOString(),
+      patient: "Paciente de prueba",
       items: [{id:"x", name:"Producto de prueba", price:100, qty:1, note:"Ejemplo de detalle: armazón modelo X"}],
       total:100, deposit:null, balance:null
     };
@@ -1175,6 +1208,7 @@
       tr.innerHTML =
         "<td class='num'>#"+sale.folio+"</td>" +
         "<td>"+formatDate(sale.dateISO)+"</td>" +
+        "<td>"+(sale.patient ? escapeHtml(sale.patient) : "<span style='color:var(--ink-muted);'>—</span>")+"</td>" +
         "<td class='num'>"+money(sale.total)+"</td>" +
         "<td><button class='icon-btn' data-act='view'>Ver / reimprimir</button></td>";
       tr.querySelector("[data-act='view']").addEventListener("click", function(){ showReceiptModal(sale, false); });
