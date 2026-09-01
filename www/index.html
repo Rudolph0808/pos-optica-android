@@ -181,17 +181,6 @@
     width:100%; padding:9px 12px; border-radius:10px; border:1px solid var(--border);
     background:var(--surface); color:var(--ink); font-size:0.9rem;
   }
-  .pay-methods{ display:flex; gap:8px; margin:12px 0; }
-  .pay-methods button{
-    flex:1; padding:10px 6px; border-radius:10px; border:1px solid var(--border); background:var(--surface-alt);
-    color:var(--ink-muted); font-weight:700; font-size:0.82rem; cursor:pointer;
-  }
-  .pay-methods button.active{ background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
-  .cash-row{ display:flex; gap:8px; margin-bottom:10px; }
-  .cash-row input{ flex:1; padding:10px 12px; border-radius:10px; border:1px solid var(--border); background:var(--surface); color:var(--ink); font-size:0.9rem; }
-  .change-note{ font-size:0.85rem; padding:6px 2px; color:var(--ink-muted); }
-  .change-note.ok{ color:var(--success); font-weight:700; }
-  .change-note.bad{ color:var(--danger); font-weight:700; }
   .btn{
     border:none; border-radius:12px; padding:13px 16px; font-weight:700; font-size:0.95rem; cursor:pointer; width:100%;
   }
@@ -214,9 +203,14 @@
   .icon-btn{ border:1px solid var(--border); background:var(--surface-alt); color:var(--ink); border-radius:8px; padding:6px 10px; cursor:pointer; font-size:0.82rem; font-weight:600; }
   .icon-btn.danger{ color:var(--danger); }
   .tag{ display:inline-block; padding:3px 10px; border-radius:999px; background:var(--accent-soft); color:var(--accent); font-size:0.74rem; font-weight:700; }
-  .tag.pay-Efectivo{ background:var(--success-soft); color:var(--success); }
-  .tag.pay-Tarjeta{ background:var(--accent-soft); color:var(--accent); }
-  .tag.pay-Transferencia{ background:var(--warning-soft); color:var(--warning); }
+
+  .product-card.product-card-add{
+    border-style:dashed; border-color:var(--accent); background:var(--accent-soft);
+    align-items:center; justify-content:center; text-align:center;
+  }
+  .product-card.product-card-add .pname,
+  .product-card.product-card-add .pcat,
+  .product-card.product-card-add .pprice{ color:var(--accent); }
 
   form.grid-form{ display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin-bottom:16px; }
   .field{ display:flex; flex-direction:column; gap:6px; }
@@ -309,17 +303,6 @@
             </div>
             <div class="sum-row saldo" id="sumSaldoRow" style="display:none;"><span>Saldo pendiente</span><span class="num" id="sumSaldo">$0.00</span></div>
 
-            <div class="pay-methods" id="payMethods">
-              <button data-pay="Efectivo" class="active">Efectivo</button>
-              <button data-pay="Tarjeta">Tarjeta</button>
-              <button data-pay="Transferencia">Transferencia</button>
-            </div>
-
-            <div class="cash-row" id="cashRow">
-              <input type="number" inputmode="decimal" id="cashReceived" placeholder="Efectivo recibido">
-            </div>
-            <div class="change-note" id="changeNote"></div>
-
             <button class="btn primary" id="checkoutBtn" disabled>Cobrar e imprimir</button>
             <button class="btn ghost" id="clearCartBtn">Cancelar venta</button>
           </div>
@@ -351,7 +334,7 @@
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Folio</th><th>Fecha</th><th>Pago</th><th>Total</th><th></th></tr></thead>
+            <thead><tr><th>Folio</th><th>Fecha</th><th>Total</th><th></th></tr></thead>
             <tbody id="salesTableBody"></tbody>
           </table>
         </div>
@@ -375,8 +358,13 @@
             </select>
           </div>
           <div class="field"><label>Mensaje final del ticket</label><input type="text" id="cfgFooter"></div>
+          <div class="field">
+            <label>Cambiar PIN de acceso</label>
+            <input type="password" inputmode="numeric" id="cfgPin" placeholder="Dejar en blanco para no cambiarlo">
+          </div>
           <div class="form-actions"><button type="submit" class="btn primary small">Guardar datos</button></div>
         </form>
+        <p class="help-text">El PIN protege Productos, Historial y Config para que no cualquiera los abra. PIN por defecto: 1234 (cámbialo aquí las veces que quieras; debe tener entre 4 y 8 dígitos).</p>
       </div>
 
       <div class="panel" style="margin-bottom:20px;">
@@ -412,10 +400,19 @@
 
   var LS = {
     products: "pos_optica_products",
+    productsVersion: "pos_optica_products_version",
     sales: "pos_optica_sales",
     config: "pos_optica_config",
-    printer: "pos_optica_printer"
+    printer: "pos_optica_printer",
+    pin: "pos_optica_pin"
   };
+
+  // Se sube este número cada vez que DEFAULT_PRODUCTS cambia de verdad (catálogo nuevo,
+  // no solo el botón de "Producto rápido" u otras funciones). Si el número guardado en la
+  // tablet es menor, se reemplaza el catálogo guardado por el de esta versión — así
+  // instalaciones previas con un catálogo viejo/genérico en localStorage sí reciben el
+  // catálogo real. v2 = catálogo real de precios (lista AUGEN, ago 2026).
+  var PRODUCTS_CATALOG_VERSION = 2;
 
   var DEFAULT_PRODUCTS = [
     {id:"p1",  name:"CR39 HD / Mica normal",                                          category:"Monofocal",          price:900},
@@ -502,16 +499,31 @@
     try{ localStorage.setItem(key, JSON.stringify(value)); }catch(e){ console.error("No se pudo guardar", e); }
   }
 
+  function loadProducts(){
+    var storedVersion = loadJSON(LS.productsVersion, 0);
+    var stored = loadJSON(LS.products, null);
+    if(!stored || storedVersion < PRODUCTS_CATALOG_VERSION){
+      // Catálogo nuevo/actualizado: reemplaza lo que hubiera guardado en la tablet
+      // (por ejemplo el catálogo genérico de una instalación vieja) por el real.
+      saveJSON(LS.products, DEFAULT_PRODUCTS);
+      saveJSON(LS.productsVersion, PRODUCTS_CATALOG_VERSION);
+      return DEFAULT_PRODUCTS.slice();
+    }
+    return stored;
+  }
+
   var state = {
-    products: loadJSON(LS.products, null) || DEFAULT_PRODUCTS.slice(),
+    products: loadProducts(),
     sales: loadJSON(LS.sales, []),
     config: Object.assign({}, DEFAULT_CONFIG, loadJSON(LS.config, {})),
     cart: [],
     activeCategory: "Todas",
-    payMethod: "Efectivo",
-    editingProductId: null
+    editingProductId: null,
+    sessionUnlocked: false
   };
-  if(!loadJSON(LS.products, null)){ saveJSON(LS.products, state.products); }
+
+  function getPin(){ return loadJSON(LS.pin, null) || "1234"; }
+  function setPin(newPin){ saveJSON(LS.pin, newPin); }
 
   function money(n){
     n = Number(n) || 0;
@@ -533,22 +545,67 @@
 
   /* ---------------- Navigation ---------------- */
   var views = document.querySelectorAll(".view");
+  var PROTECTED_VIEWS = { productos:true, historial:true, config:true };
+
+  function promptForPin(onSuccess){
+    var backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    backdrop.innerHTML =
+      '<div class="modal" style="max-width:320px;">' +
+        '<div class="modal-head"><h3>Acceso restringido</h3><button data-close>✕</button></div>' +
+        '<div class="modal-body">' +
+          '<div class="field"><label>PIN</label><input type="password" inputmode="numeric" id="pinInput" placeholder="••••"></div>' +
+          '<p class="help-text" id="pinError" style="display:none;color:var(--danger);">PIN incorrecto.</p>' +
+        '</div>' +
+        '<div class="modal-foot">' +
+          '<button class="btn primary" data-ok>Entrar</button>' +
+          '<button class="btn ghost" data-close>Cancelar</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(backdrop);
+    var input = backdrop.querySelector("#pinInput");
+    function close(){ backdrop.remove(); }
+    backdrop.querySelectorAll("[data-close]").forEach(function(b){ b.addEventListener("click", close); });
+    function tryUnlock(){
+      if(input.value === getPin()){
+        state.sessionUnlocked = true;
+        close();
+        onSuccess();
+      } else {
+        backdrop.querySelector("#pinError").style.display = "block";
+        input.value = "";
+        input.focus();
+      }
+    }
+    backdrop.querySelector("[data-ok]").addEventListener("click", tryUnlock);
+    input.addEventListener("keydown", function(e){ if(e.key === "Enter") tryUnlock(); });
+    setTimeout(function(){ input.focus(); }, 30);
+  }
+
   document.getElementById("mainNav").addEventListener("click", function(e){
     var btn = e.target.closest("button[data-view]");
     if(!btn) return;
-    document.querySelectorAll("#mainNav button").forEach(function(b){ b.classList.remove("active"); });
-    btn.classList.add("active");
     var target = btn.getAttribute("data-view");
-    views.forEach(function(v){ v.classList.toggle("active", v.id === "view-"+target); });
-    if(target === "productos") renderProductsTable();
-    if(target === "historial") renderSalesTable();
-    if(target === "config") fillConfigForm();
+    function activate(){
+      document.querySelectorAll("#mainNav button").forEach(function(b){ b.classList.remove("active"); });
+      btn.classList.add("active");
+      views.forEach(function(v){ v.classList.toggle("active", v.id === "view-"+target); });
+      if(target === "productos") renderProductsTable();
+      if(target === "historial") renderSalesTable();
+      if(target === "config") fillConfigForm();
+    }
+    if(PROTECTED_VIEWS[target] && !state.sessionUnlocked){
+      promptForPin(activate);
+    } else {
+      activate();
+    }
   });
 
   /* ---------------- Ventas: catálogo ---------------- */
   function getCategories(){
     var set = {};
     state.products.forEach(function(p){ set[p.category] = true; });
+    set["Armazones"] = true; // categoría siempre visible: solo trae el botón de producto rápido
     return Object.keys(set);
   }
 
@@ -572,15 +629,19 @@
   function renderProductGrid(){
     var grid = document.getElementById("productGrid");
     var q = (document.getElementById("searchInput").value || "").trim().toLowerCase();
-    var list = state.products.filter(function(p){
+    var isArmazones = state.activeCategory === "Armazones";
+    var list = isArmazones ? [] : state.products.filter(function(p){
       var matchesCat = state.activeCategory === "Todas" || p.category === state.activeCategory;
       var matchesSearch = !q || p.name.toLowerCase().indexOf(q) !== -1;
       return matchesCat && matchesSearch;
     });
     grid.innerHTML = "";
-    if(list.length === 0){
-      grid.innerHTML = '<div class="empty-note">No se encontraron productos.</div>';
-      return;
+    if(list.length === 0 && !isArmazones){
+      var note = document.createElement("div");
+      note.className = "empty-note";
+      note.style.gridColumn = "1/-1";
+      note.textContent = "No se encontraron productos. Usa \"Producto rápido\" para agregarlo directo al carrito.";
+      grid.appendChild(note);
     }
     list.forEach(function(p){
       var card = document.createElement("button");
@@ -591,6 +652,13 @@
       card.addEventListener("click", function(){ addToCart(p); });
       grid.appendChild(card);
     });
+    var addCard = document.createElement("button");
+    addCard.className = "product-card product-card-add";
+    addCard.innerHTML = '<span class="pcat">Agregar</span>' +
+                         '<span class="pname">+ Producto rápido</span>' +
+                         '<span class="pprice num">Nombre, precio y detalle</span>';
+    addCard.addEventListener("click", openQuickAddModal);
+    grid.appendChild(addCard);
   }
 
   function escapeHtml(str){
@@ -608,6 +676,41 @@
     else{ state.cart.push({id:product.id, name:product.name, price:product.price, qty:1, note:""}); }
     renderCart();
   }
+  function openQuickAddModal(){
+    var backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    backdrop.innerHTML =
+      '<div class="modal">' +
+        '<div class="modal-head"><h3>Producto rápido</h3><button data-close>✕</button></div>' +
+        '<div class="modal-body">' +
+          '<div class="field" style="margin-bottom:12px;"><label>Nombre</label><input type="text" id="qaName" placeholder="Ej. Armazón modelo X"></div>' +
+          '<div class="field" style="margin-bottom:12px;"><label>Precio</label><input type="number" step="0.01" id="qaPrice" placeholder="0.00"></div>' +
+          '<div class="field"><label>Descripción (opcional)</label><input type="text" id="qaDesc" placeholder="Detalle que aparece en el recibo"></div>' +
+        '</div>' +
+        '<div class="modal-foot">' +
+          '<button class="btn primary" data-add>Agregar al carrito</button>' +
+          '<button class="btn ghost" data-close>Cancelar</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(backdrop);
+    backdrop.querySelectorAll("[data-close]").forEach(function(b){ b.addEventListener("click", function(){ backdrop.remove(); }); });
+    backdrop.querySelector("[data-add]").addEventListener("click", function(){
+      var name = document.getElementById("qaName").value.trim();
+      var price = Number(document.getElementById("qaPrice").value);
+      var desc = document.getElementById("qaDesc").value.trim();
+      if(!name || isNaN(price) || price < 0){
+        alert("Ingresa un nombre y un precio válido.");
+        return;
+      }
+      // Se agrega directo al carrito como línea temporal; no se guarda en el catálogo de productos.
+      state.cart.push({ id: uid("tmp"), name:name, price:price, qty:1, note:desc });
+      renderCart();
+      backdrop.remove();
+      toast("Agregado al carrito");
+    });
+    setTimeout(function(){ document.getElementById("qaName").focus(); }, 30);
+  }
+
   function changeQty(id, delta){
     var item = state.cart.find(function(i){ return i.id === id; });
     if(!item) return;
@@ -667,7 +770,6 @@
     document.getElementById("sumTotal").textContent = money(t.total);
     document.getElementById("checkoutBtn").disabled = state.cart.length === 0;
     updateSaldoRow();
-    updateChangeNote();
   }
 
   function updateSaldoRow(){
@@ -684,58 +786,19 @@
 
   document.getElementById("depositInput").addEventListener("input", function(){
     updateSaldoRow();
-    updateChangeNote();
   });
 
   document.getElementById("clearCartBtn").addEventListener("click", function(){
     if(state.cart.length && !confirm("¿Cancelar la venta actual?")) return;
     state.cart = [];
-    document.getElementById("cashReceived").value = "";
     document.getElementById("depositInput").value = "";
     renderCart();
   });
-
-  /* ---------------- Métodos de pago ---------------- */
-  document.getElementById("payMethods").addEventListener("click", function(e){
-    var btn = e.target.closest("button[data-pay]");
-    if(!btn) return;
-    state.payMethod = btn.getAttribute("data-pay");
-    document.querySelectorAll("#payMethods button").forEach(function(b){ b.classList.remove("active"); });
-    btn.classList.add("active");
-    document.getElementById("cashRow").style.display = state.payMethod === "Efectivo" ? "flex" : "none";
-    updateChangeNote();
-  });
-
-  document.getElementById("cashReceived").addEventListener("input", updateChangeNote);
-
-  function updateChangeNote(){
-    var note = document.getElementById("changeNote");
-    if(state.payMethod !== "Efectivo"){ note.textContent = ""; note.className = "change-note"; return; }
-    var due = amountDue();
-    var received = Number(document.getElementById("cashReceived").value);
-    if(!document.getElementById("cashReceived").value){ note.textContent = ""; note.className = "change-note"; return; }
-    if(isNaN(received) || received < due){
-      note.textContent = "Falta " + money(due - (isNaN(received)?0:received));
-      note.className = "change-note bad";
-    } else {
-      note.textContent = "Cambio: " + money(received - due);
-      note.className = "change-note ok";
-    }
-  }
 
   /* ---------------- Cobro ---------------- */
   document.getElementById("checkoutBtn").addEventListener("click", function(){
     var t = cartTotals();
     var dep = depositAmount();
-    var due = amountDue();
-    var received = null;
-    if(state.payMethod === "Efectivo"){
-      received = Number(document.getElementById("cashReceived").value);
-      if(!document.getElementById("cashReceived").value || isNaN(received) || received < due){
-        alert("Ingresa el efectivo recibido (debe cubrir " + (dep > 0 ? "el anticipo" : "el total") + ").");
-        return;
-      }
-    }
     var folio = (state.sales.length + 1);
     var sale = {
       id: uid("s"),
@@ -744,15 +807,11 @@
       items: state.cart.map(function(i){ return {id:i.id, name:i.name, price:i.price, qty:i.qty, note:i.note||""}; }),
       total: t.total,
       deposit: dep > 0 ? dep : null,
-      balance: dep > 0 ? (t.total - dep) : null,
-      payment: state.payMethod,
-      received: received,
-      change: received !== null ? received - due : null
+      balance: dep > 0 ? (t.total - dep) : null
     };
     state.sales.push(sale);
     saveJSON(LS.sales, state.sales);
     state.cart = [];
-    document.getElementById("cashReceived").value = "";
     document.getElementById("depositInput").value = "";
     renderCart();
     toast("Venta #" + folio + " registrada");
@@ -799,12 +858,7 @@
     });
     lines.push(line("-"));
     lines.push(twoCols("TOTAL:", money(sale.total)));
-    lines.push(twoCols("Pago:", sale.payment));
     if(sale.deposit){ lines.push(twoCols("Anticipo:", money(sale.deposit))); }
-    if(sale.payment === "Efectivo" && sale.received !== null){
-      lines.push(twoCols("Recibido:", money(sale.received)));
-      lines.push(twoCols("Cambio:", money(sale.change)));
-    }
     if(sale.deposit){ lines.push(twoCols("Saldo pendiente:", money(sale.balance))); }
     lines.push(line("-"));
     lines.push(center(state.config.footer || "¡Gracias por su visita!"));
@@ -990,13 +1044,20 @@
   }
 
   async function printReceipt(sale){
+    // Se imprimen 2 copias exactas de cada recibo: una para el consultorio y otra para el paciente.
+    var COPIES = 2;
     var lines = buildReceiptLines(sale);
     var plugin = escposPlugin();
     if(plugin && printerConnected){
       try{
         var bytes = escposFromLines(lines, Number(state.config.ticketWidth)||48);
-        var result = await plugin.print({ dataBase64: bytesToBase64(bytes) });
-        if(result && result.success) return;
+        var b64 = bytesToBase64(bytes);
+        var okAny = false;
+        for(var i=0;i<COPIES;i++){
+          var result = await plugin.print({ dataBase64: b64 });
+          if(result && result.success) okAny = true;
+        }
+        if(okAny) return;
       }catch(err){
         console.error("Fallo impresión USB, usando respaldo:", err);
       }
@@ -1005,10 +1066,13 @@
   }
 
   document.getElementById("printerPill").addEventListener("click", function(){
-    document.querySelectorAll("#mainNav button").forEach(function(b){ b.classList.remove("active"); });
-    document.querySelector('#mainNav button[data-view="config"]').classList.add("active");
-    views.forEach(function(v){ v.classList.toggle("active", v.id === "view-config"); });
-    fillConfigForm();
+    function activate(){
+      document.querySelectorAll("#mainNav button").forEach(function(b){ b.classList.remove("active"); });
+      document.querySelector('#mainNav button[data-view="config"]').classList.add("active");
+      views.forEach(function(v){ v.classList.toggle("active", v.id === "view-config"); });
+      fillConfigForm();
+    }
+    if(!state.sessionUnlocked){ promptForPin(activate); } else { activate(); }
   });
   document.getElementById("connectPrinterBtn").addEventListener("click", connectPrinter);
   document.getElementById("forgetPrinterBtn").addEventListener("click", forgetPrinter);
@@ -1017,8 +1081,7 @@
       folio: "TEST",
       dateISO: new Date().toISOString(),
       items: [{id:"x", name:"Producto de prueba", price:100, qty:1, note:"Ejemplo de detalle: armazón modelo X"}],
-      total:100, deposit:null, balance:null,
-      payment:"Efectivo", received:100, change:0
+      total:100, deposit:null, balance:null
     };
     printReceipt(fakeSale);
   });
@@ -1112,7 +1175,6 @@
       tr.innerHTML =
         "<td class='num'>#"+sale.folio+"</td>" +
         "<td>"+formatDate(sale.dateISO)+"</td>" +
-        "<td><span class='tag pay-"+sale.payment+"'>"+sale.payment+"</span></td>" +
         "<td class='num'>"+money(sale.total)+"</td>" +
         "<td><button class='icon-btn' data-act='view'>Ver / reimprimir</button></td>";
       tr.querySelector("[data-act='view']").addEventListener("click", function(){ showReceiptModal(sale, false); });
@@ -1128,19 +1190,29 @@
     document.getElementById("cfgPhone").value = state.config.phone || "";
     document.getElementById("cfgWidth").value = String(state.config.ticketWidth);
     document.getElementById("cfgFooter").value = state.config.footer || "";
+    document.getElementById("cfgPin").value = "";
   }
 
   document.getElementById("configForm").addEventListener("submit", function(e){
     e.preventDefault();
+    var newPin = document.getElementById("cfgPin").value.trim();
+    if(newPin && !/^\d{4,8}$/.test(newPin)){
+      alert("El PIN debe tener entre 4 y 8 dígitos.");
+      return;
+    }
     state.config.name = document.getElementById("cfgName").value.trim() || "Dr. Rodolfo Vega Ponce";
     state.config.address = document.getElementById("cfgAddress").value.trim();
     state.config.phone = document.getElementById("cfgPhone").value.trim();
     state.config.ticketWidth = Number(document.getElementById("cfgWidth").value) || 48;
     state.config.footer = document.getElementById("cfgFooter").value.trim();
     saveJSON(LS.config, state.config);
+    if(newPin){
+      setPin(newPin);
+      document.getElementById("cfgPin").value = "";
+    }
     document.getElementById("brandNameDisplay").textContent = state.config.name;
     renderCart();
-    toast("Datos guardados");
+    toast("Datos guardados" + (newPin ? " · PIN actualizado" : ""));
   });
 
   /* ---------------- Respaldo ---------------- */
